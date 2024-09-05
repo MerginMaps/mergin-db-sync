@@ -13,7 +13,7 @@ from mergin import (
     MerginClient,
 )
 
-from dbsync import dbsync_pull, dbsync_push, config, DbSyncError
+from dbsync import dbsync_pull, dbsync_push, config, DbSyncError, dbsync_init
 
 from .conftest import (
     GEODIFF_EXE,
@@ -148,3 +148,65 @@ def test_missing_table(mc: MerginClient):
         init_sync_from_db(mc, project_name, path_test_data("create_another_schema.sql"))
 
     assert "The 'modified' schema does not exist" in str(err.value)
+
+
+def test_mm_project_change(mc: MerginClient, db_connection):
+    """Test that after init and local changes the changes are correctly pushed to database"""
+    project_name = "test_project_change"
+    project_full_name = complete_project_name(project_name)
+    project_dir = name_project_dir(project_name)
+    db_schema_main = "test_init_from_db_main"
+    db_schema_base = "test_init_from_db_base"
+
+    path_synced_gpkg = project_dir + "/" + filename_sync_gpkg()
+
+    init_sync_from_db(mc, project_name, path_test_data("create_base.sql"))
+
+    cur = db_connection.cursor()
+
+    # check that there are 3 features prior to changes
+    cur.execute(f'SELECT COUNT(*) from {db_schema_main}."simple"')
+    assert cur.fetchone()[0] == 3
+
+    mc.download_project(project_full_name, project_dir)
+
+    # make changes in GPKG to create new version of the project
+    shutil.copy(path_test_data("inserted_point_from_db.gpkg"), path_synced_gpkg)
+
+    # push project
+    mc.push_project(project_dir)
+
+    # run sync
+    dbsync_pull(mc)
+    dbsync_push(mc)
+
+    # check that new feature was added
+    cur.execute(f'SELECT COUNT(*) from {db_schema_main}."simple"')
+    assert cur.fetchone()[0] == 4
+
+    project_name = "test_project_change_2"
+    project_full_name = complete_project_name(project_name)
+    project_dir = name_project_dir(project_name)
+    mc.create_project_and_push(project_full_name, project_dir)
+
+    # change config to new project
+    config.update(
+        {
+            "CONNECTIONS": [
+                {
+                    "driver": "postgres",
+                    "conn_info": DB_CONNINFO,
+                    "modified": db_schema_main,
+                    "base": db_schema_base,
+                    "mergin_project": project_full_name,
+                    "sync_file": filename_sync_gpkg(),
+                }
+            ]
+        }
+    )
+
+    # run init
+    with pytest.raises(
+        DbSyncError, match="Mergin Maps project ID doesn't match Mergin Maps project ID stored in the database"
+    ):
+        dbsync_init(mc)

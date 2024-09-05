@@ -18,7 +18,7 @@ SERVER_URL = os.environ.get("TEST_MERGIN_URL")
 API_USER = os.environ.get("TEST_API_USERNAME")
 USER_PWD = os.environ.get("TEST_API_PASSWORD")
 WORKSPACE = os.environ.get("TEST_API_WORKSPACE")
-TMP_DIR = tempfile.gettempdir()
+TMP_DIR = os.path.join(tempfile.gettempdir(), "dbsync_test")
 TEST_DATA_DIR = os.path.join(
     os.path.dirname(os.path.realpath(__file__)),
     "test_data",
@@ -167,7 +167,7 @@ def init_sync_from_geopackage(mc, project_name, source_gpkg_path, ignored_tables
     dbsync_init(mc)
 
 
-@pytest.fixture(scope="function")
+@pytest.fixture(scope="session")
 def mc():
     assert SERVER_URL and API_USER and USER_PWD
     # assert SERVER_URL and SERVER_URL.rstrip('/') != 'https://app.merginmaps.com/' and API_USER and USER_PWD
@@ -299,3 +299,37 @@ def init_sync_from_db(mc: MerginClient, project_name: str, path_sql_file: str, i
     )
 
     dbsync_init(mc)
+
+
+def _clean_workspace(mc: MerginClient, workspace: str) -> None:
+    """Immediately delete all projects in the test workspace."""
+
+    projects = mc.projects_list(only_namespace=workspace)
+
+    for project in projects:
+        mc.delete_project_now(f"{workspace}/{project['name']}")
+
+
+@pytest.fixture(autouse=True, scope="session")
+def clean_workspace(mc: MerginClient):
+    """Delete all projects in the test workspace prior and after test session."""
+
+    _clean_workspace(mc, WORKSPACE)
+    yield
+    _clean_workspace(mc, WORKSPACE)
+
+
+def _remove_dir(dir_path: str) -> None:
+    """Remove directory if it exists."""
+
+    if os.path.exists(dir_path):
+        shutil.rmtree(dir_path)
+
+
+@pytest.fixture(autouse=True, scope="session")
+def clean_test_dir():
+    """Remove and recreate temporary directory for test files. Remove it after test session."""
+    _remove_dir(TMP_DIR)
+    os.makedirs(TMP_DIR)
+    yield
+    _remove_dir(TMP_DIR)
